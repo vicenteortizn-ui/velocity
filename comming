@@ -1,0 +1,833 @@
+name: Compilar APK Velocity
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Crear el proyecto Android
+        run: |
+          set -e
+          mkdir -p app/src/main/java/com/velocity/app app/src/main/assets
+
+          cat > settings.gradle <<'VELOCITY_EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'Velocity'
+          include ':app'
+          VELOCITY_EOF
+
+          cat > build.gradle <<'VELOCITY_EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          VELOCITY_EOF
+
+          cat > gradle.properties <<'VELOCITY_EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          VELOCITY_EOF
+
+          cat > app/build.gradle <<'VELOCITY_EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.velocity.app'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.velocity.app'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'androidx.webkit:webkit:1.11.0'
+          }
+          VELOCITY_EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'VELOCITY_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-feature android:name="android.hardware.camera" android:required="false" />
+              <application
+                  android:label="Velocity"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+                  android:usesCleartextTraffic="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          VELOCITY_EOF
+
+          cat > app/src/main/java/com/velocity/app/MainActivity.java <<'VELOCITY_EOF'
+          package com.velocity.app;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.view.WindowManager;
+          import android.webkit.PermissionRequest;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          import androidx.webkit.WebViewAssetLoader;
+
+          public class MainActivity extends Activity {
+              private static final int REQ_CAMERA = 1;
+              private static final int REQ_FILE = 2;
+
+              private WebView web;
+              private PermissionRequest pendingRequest;
+              private ValueCallback<Uri[]> fileCallback;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+                  web = new WebView(this);
+                  setContentView(web);
+
+                  WebSettings settings = web.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setAllowFileAccess(false);
+
+                  final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+                          .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                          .build();
+
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                          return loader.shouldInterceptRequest(request.getUrl());
+                      }
+                  });
+
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest request) {
+                          runOnUiThread(new Runnable() {
+                              @Override
+                              public void run() {
+                                  if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                      request.grant(request.getResources());
+                                  } else {
+                                      pendingRequest = request;
+                                      requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+                                  }
+                              }
+                          });
+                      }
+
+                      @Override
+                      public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                          if (fileCallback != null) fileCallback.onReceiveValue(null);
+                          fileCallback = callback;
+                          try {
+                              startActivityForResult(params.createIntent(), REQ_FILE);
+                          } catch (Exception e) {
+                              fileCallback = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+
+                  web.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+                  if (requestCode == REQ_CAMERA && pendingRequest != null) {
+                      boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+                      if (ok) pendingRequest.grant(pendingRequest.getResources());
+                      else pendingRequest.deny();
+                      pendingRequest = null;
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == REQ_FILE && fileCallback != null) {
+                      fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                      fileCallback = null;
+                  }
+              }
+
+              @Override
+              protected void onDestroy() {
+                  if (web != null) web.destroy();
+                  super.onDestroy();
+              }
+          }
+          VELOCITY_EOF
+
+          cat > app/src/main/assets/index.html <<'VELOCITY_HTML_EOF'
+          <!DOCTYPE html>
+          <html lang="es">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+              <meta name="theme-color" content="#030303">
+              <title>Proyecttec Elite - Análisis visual de sentadillas</title>
+              <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+              <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+              <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+              <style>
+                  :root {
+                      --panel: rgba(20, 20, 23, 0.94);
+                      --panel-2: rgba(11, 11, 13, 0.82);
+                  }
+                  * { box-sizing: border-box; }
+                  html { -webkit-tap-highlight-color: transparent; }
+                  body {
+                      background-color: #030303;
+                      background-image: radial-gradient(circle at 50% -10%, rgba(242, 201, 76, 0.09), transparent 40%);
+                      color: #f3f4f6;
+                      letter-spacing: 0.01em;
+                  }
+                  button, input { touch-action: manipulation; }
+                  button { transition: transform .16s ease, background-color .16s ease, opacity .16s ease; }
+                  button:active { transform: scale(.97); }
+                  button:focus-visible { outline: 2px solid #facc15; outline-offset: 2px; }
+                  .app-shell {
+                      width: 100%;
+                      max-width: 1180px;
+                      margin: 0 auto;
+                      padding: 14px 10px calc(20px + env(safe-area-inset-bottom));
+                  }
+                  .panel {
+                      background: var(--panel);
+                      border: 1px solid rgba(242, 201, 76, 0.18);
+                      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
+                  }
+                  .panel-subtle {
+                      background: var(--panel-2);
+                      border: 1px solid rgba(255, 255, 255, 0.055);
+                  }
+                  .gold-border { border-color: rgba(212, 175, 55, 0.35); }
+                  .metric-value { font-variant-numeric: tabular-nums; }
+                  .video-frame { background: #080808; aspect-ratio: 3 / 4; max-height: 72vh; margin: 0 auto; }
+                  @media (min-width: 900px) { .video-frame { aspect-ratio: 16 / 9; max-height: none; } }
+                  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+              </style>
+          </head>
+          <body class="font-sans min-h-screen">
+
+              <!-- MODAL DE INICIO -->
+              <div id="privacy-modal" class="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                  <div class="panel max-w-md w-full p-5 rounded-2xl text-center">
+                      <h2 class="text-xl font-bold text-yellow-400 mb-1">Proyecttec Elite</h2>
+                      <p class="text-sm text-zinc-300 leading-relaxed mb-4">
+                          Análisis visual de sentadillas con la cámara del celular. Elige cómo empezar:
+                      </p>
+
+                      <div class="space-y-3 mb-4">
+                          <button id="start-front-btn" class="w-full py-3.5 bg-gradient-to-r from-yellow-500 to-amber-600 text-black font-extrabold text-sm rounded-xl">
+                              Usar cámara frontal (para verme)
+                          </button>
+                          <button id="start-back-btn" class="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-yellow-400 border border-amber-500/40 font-bold text-sm rounded-xl">
+                              Usar cámara trasera
+                          </button>
+                          <p class="text-xs text-zinc-400">
+                              El navegador pedirá permiso: toca <strong class="text-yellow-400">Permitir</strong>. Si ya lo bloqueaste, activa la cámara en los permisos del sitio.
+                          </p>
+
+                          <input type="file" id="file-input-record" accept="video/*" capture="user" class="hidden">
+                          <button id="record-btn-modal" class="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-yellow-400 border border-amber-500/40 font-bold text-sm rounded-xl">
+                              Grabar video con la cámara del celular
+                          </button>
+                          <input type="file" id="file-input-modal" accept="video/*,image/*" class="hidden">
+                          <button id="file-btn-modal" class="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold text-sm rounded-xl">
+                              Subir video o foto de la galería
+                          </button>
+                      </div>
+
+                      <p id="modal-feedback" class="hidden text-xs text-red-300 mb-3" role="alert"></p>
+                      <div class="p-3 bg-black/50 rounded-lg border border-zinc-800 text-xs text-zinc-400 text-left">
+                          El análisis se hace en tu dispositivo; el video no se envía a ningún servidor. Se necesita conexión la primera vez para descargar el modelo de seguimiento.
+                      </div>
+                  </div>
+              </div>
+
+              <div class="app-shell">
+                  <header class="w-full text-center mb-3">
+                      <h1 class="text-2xl sm:text-3xl md:text-5xl font-black tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-500 to-yellow-600">
+                          PROYECTTEC <span class="text-white text-base md:text-xl font-light">ELITE</span>
+                      </h1>
+                      <p class="text-amber-500/80 text-xs mt-1">Análisis visual de sentadillas</p>
+                  </header>
+
+                  <main class="w-full grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-5">
+
+                      <!-- VISOR -->
+                      <div class="lg:col-span-2 flex flex-col panel p-3 sm:p-4 rounded-2xl">
+                          <div class="flex flex-wrap justify-between items-center mb-2 gap-2">
+                              <h2 class="text-sm font-bold text-yellow-400">Visor</h2>
+                              <div class="flex items-center gap-2 flex-wrap">
+                                  <button id="switch-cam-btn" class="hidden text-xs bg-zinc-800 hover:bg-amber-500 hover:text-black text-amber-400 border gold-border px-3 py-1.5 rounded-full font-semibold">
+                                      Cambiar cámara
+                                  </button>
+                                  <input type="file" id="file-input-main" accept="video/*,image/*" class="hidden">
+                                  <button id="file-btn-main" class="text-xs bg-zinc-800 hover:bg-amber-500 hover:text-black text-amber-400 border gold-border px-3 py-1.5 rounded-full font-semibold">
+                                      Galería
+                                  </button>
+                                  <span id="status-badge" class="text-xs bg-zinc-800 text-zinc-400 border border-zinc-700 px-2.5 py-1 rounded-full" aria-live="polite">En espera</span>
+                              </div>
+                          </div>
+
+                          <div class="video-frame relative w-full rounded-xl overflow-hidden border border-zinc-800 flex items-center justify-center">
+                              <video id="input_video" class="hidden" autoplay muted playsinline webkit-playsinline></video>
+                              <canvas id="output_canvas" class="w-full h-full object-contain"></canvas>
+                              <div id="loading-overlay" class="hidden absolute inset-0 bg-black/70 flex items-center justify-center text-sm text-yellow-300 text-center p-4">
+                                  Cargando el modelo de seguimiento…<br>la primera vez puede tardar unos segundos.
+                              </div>
+                          </div>
+
+                          <div class="grid grid-cols-3 gap-2 mt-3 text-center items-stretch">
+                              <div class="panel-subtle p-2 rounded-xl flex flex-col justify-center min-h-[92px]">
+                                  <span class="block text-zinc-400 text-xs">Repeticiones</span>
+                                  <span id="counter" class="metric-value text-2xl font-black text-yellow-400">0</span>
+                                  <button id="reset-counter-btn" class="block mx-auto mt-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded">
+                                      Reiniciar
+                                  </button>
+                              </div>
+                              <div class="panel-subtle p-2 rounded-xl flex flex-col justify-center min-h-[92px]">
+                                  <span class="block text-zinc-400 text-xs">Ángulo de rodilla</span>
+                                  <span id="angle-display" class="metric-value text-2xl font-black text-amber-400">—</span>
+                              </div>
+                              <div class="panel-subtle p-2 rounded-xl flex flex-col items-center justify-center min-h-[92px]">
+                                  <span class="block text-zinc-400 text-xs">Cronómetro</span>
+                                  <span id="timer" class="metric-value text-lg font-black text-emerald-400 my-0.5">00:00</span>
+                                  <div class="flex gap-1">
+                                      <button id="timer-play" class="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-black font-bold text-xs rounded">Iniciar</button>
+                                      <button id="timer-pause" class="px-2 py-1 bg-yellow-600 hover:bg-yellow-500 text-black font-bold text-xs rounded">Pausa</button>
+                                      <button id="timer-reset" class="px-2 py-1 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded">Cero</button>
+                                  </div>
+                              </div>
+                          </div>
+
+                          <div class="mt-3 p-3 rounded-xl bg-black/50 border border-zinc-800 text-center">
+                              <span id="feedback" class="text-sm font-semibold text-zinc-400" aria-live="polite">Autoriza la cámara o carga un archivo para empezar.</span>
+                          </div>
+                      </div>
+
+                      <!-- GUÍA -->
+                      <div class="panel p-4 rounded-2xl flex flex-col justify-between">
+                          <div>
+                              <h2 class="text-sm font-bold text-yellow-400 mb-3">Cómo usarlo</h2>
+                              <p class="text-sm text-zinc-300 leading-relaxed mb-3">
+                                  La cámara estima puntos del cuerpo para mostrar el ángulo aproximado de la rodilla y contar repeticiones. Es una ayuda visual: no reemplaza la evaluación de un profesional.
+                              </p>
+                              <div class="p-3 bg-black/50 rounded-xl border border-zinc-800 text-xs text-zinc-300 leading-relaxed space-y-1.5">
+                                  <p><strong class="text-yellow-400">Posición:</strong> apoya el celular en vertical sobre una superficie estable, a 2–3 metros, y colócate de perfil.</p>
+                                  <p><strong class="text-yellow-400">Encuadre:</strong> que se vean cabeza, cadera, rodillas y pies, con buena luz.</p>
+                                  <p><strong class="text-yellow-400">Conteo:</strong> cuenta una repetición al bajar de ~110° y volver a ~155° o más.</p>
+                              </div>
+                          </div>
+                          <button id="stop-camera-btn" class="hidden mt-4 w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-sm rounded-xl">
+                              Detener y volver al inicio
+                          </button>
+                      </div>
+                  </main>
+
+                  <footer class="w-full text-center text-xs text-zinc-500 mt-4">
+                      Mantén el teléfono fijo y el área de movimiento despejada.
+                  </footer>
+              </div>
+
+              <script>
+                  const POSE_VERSION = '0.5.1675469404';
+                  const STAND_ANGLE = 155;
+                  const DOWN_ANGLE = 110;
+                  const MAX_CONSECUTIVE_ERRORS = 5;
+
+                  const video = document.getElementById('input_video');
+                  const canvas = document.getElementById('output_canvas');
+                  const ctx = canvas.getContext('2d');
+                  const statusBadge = document.getElementById('status-badge');
+                  const feedback = document.getElementById('feedback');
+                  const modalFeedback = document.getElementById('modal-feedback');
+                  const angleDisplay = document.getElementById('angle-display');
+                  const counterDisplay = document.getElementById('counter');
+                  const modal = document.getElementById('privacy-modal');
+                  const stopCameraButton = document.getElementById('stop-camera-btn');
+                  const switchCamButton = document.getElementById('switch-cam-btn');
+                  const loadingOverlay = document.getElementById('loading-overlay');
+
+                  let pose = null;
+                  let cameraStream = null;
+                  let facingMode = 'user';
+                  let animationFrame = null;
+                  let sendingFrame = false;
+                  let currentObjectUrl = null;
+                  let wakeLock = null;
+                  let consecutiveErrors = 0;
+                  let lastAngle = null;
+                  let lastSide = null;
+                  let repetitionPhase = 'waiting';
+                  let repetitions = 0;
+                  let timerInterval = null;
+                  let timerStartedAt = 0;
+                  let timerElapsed = 0;
+
+                  function setStatus(text, colorClass) {
+                      statusBadge.textContent = text;
+                      statusBadge.className = 'text-xs border px-2.5 py-1 rounded-full ' + colorClass;
+                  }
+
+                  function setFeedback(text, colorClass) {
+                      feedback.textContent = text;
+                      feedback.className = 'text-sm font-semibold ' + colorClass;
+                  }
+
+                  function setMirror(on) {
+                      canvas.classList.toggle('-scale-x-100', on);
+                  }
+
+                  function showModalError(text) {
+                      modalFeedback.textContent = text;
+                      modalFeedback.classList.remove('hidden');
+                  }
+
+                  function clearCanvas() {
+                      ctx.clearRect(0, 0, canvas.width, canvas.height);
+                  }
+
+                  /* Ángulo en el vértice b, calculado en píxeles para no deformarlo por la proporción del video */
+                  function calculateAngle(a, b, c) {
+                      const w = canvas.width;
+                      const h = canvas.height;
+                      const abx = (a.x - b.x) * w;
+                      const aby = (a.y - b.y) * h;
+                      const cbx = (c.x - b.x) * w;
+                      const cby = (c.y - b.y) * h;
+                      const denominator = Math.hypot(abx, aby) * Math.hypot(cbx, cby);
+                      if (!denominator) return null;
+                      const cosine = Math.max(-1, Math.min(1, (abx * cbx + aby * cby) / denominator));
+                      return Math.acos(cosine) * (180 / Math.PI);
+                  }
+
+                  async function requestWakeLock() {
+                      try {
+                          if ('wakeLock' in navigator && !wakeLock) {
+                              wakeLock = await navigator.wakeLock.request('screen');
+                              wakeLock.addEventListener('release', function() { wakeLock = null; });
+                          }
+                      } catch (error) { /* opcional: si falla, la pantalla puede apagarse */ }
+                  }
+
+                  function releaseWakeLock() {
+                      if (wakeLock) {
+                          wakeLock.release().catch(function() {});
+                          wakeLock = null;
+                      }
+                  }
+
+                  document.addEventListener('visibilitychange', function() {
+                      if (document.visibilityState === 'visible' && (cameraStream || video.src)) requestWakeLock();
+                  });
+
+                  function updatePose(results) {
+                      const image = results.image;
+                      if (!image) return;
+                      loadingOverlay.classList.add('hidden');
+                      consecutiveErrors = 0;
+
+                      const width = image.videoWidth || image.naturalWidth || image.width;
+                      const height = image.videoHeight || image.naturalHeight || image.height;
+                      if (width && height && (canvas.width !== width || canvas.height !== height)) {
+                          canvas.width = width;
+                          canvas.height = height;
+                      }
+
+                      ctx.save();
+                      ctx.clearRect(0, 0, canvas.width, canvas.height);
+                      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+                      const landmarks = results.poseLandmarks;
+                      if (!landmarks) {
+                          lastAngle = null;
+                          angleDisplay.textContent = '—';
+                          setFeedback('No se detecta el cuerpo. Ajusta la posición y la luz.', 'text-yellow-300');
+                          ctx.restore();
+                          return;
+                      }
+
+                      if (window.drawConnectors && window.drawLandmarks) {
+                          window.drawConnectors(ctx, landmarks, window.POSE_CONNECTIONS, {
+                              color: '#facc15',
+                              lineWidth: Math.max(2, canvas.width / 240)
+                          });
+                          window.drawLandmarks(ctx, landmarks, {
+                              color: '#ffffff',
+                              lineWidth: 1,
+                              radius: Math.max(2, canvas.width / 180)
+                          });
+                      }
+
+                      const sides = [
+                          { name: 'left', hip: 23, knee: 25, ankle: 27 },
+                          { name: 'right', hip: 24, knee: 26, ankle: 28 }
+                      ];
+                      let bestAngle = null;
+                      let bestVisibility = 0;
+                      let bestSide = null;
+                      for (const side of sides) {
+                          const hip = landmarks[side.hip];
+                          const knee = landmarks[side.knee];
+                          const ankle = landmarks[side.ankle];
+                          const visibility = Math.min(
+                              hip.visibility == null ? 1 : hip.visibility,
+                              knee.visibility == null ? 1 : knee.visibility,
+                              ankle.visibility == null ? 1 : ankle.visibility
+                          );
+                          if (visibility >= 0.5 && visibility > bestVisibility) {
+                              bestAngle = calculateAngle(hip, knee, ankle);
+                              bestVisibility = visibility;
+                              bestSide = side.name;
+                          }
+                      }
+
+                      if (bestAngle === null) {
+                          lastAngle = null;
+                          angleDisplay.textContent = '—';
+                          setFeedback('No se ven bien cadera, rodilla y tobillo. Aléjate un poco del celular.', 'text-yellow-300');
+                          ctx.restore();
+                          return;
+                      }
+
+                      if (bestSide !== lastSide) {
+                          lastAngle = null; // evita saltos al cambiar de pierna
+                          lastSide = bestSide;
+                      }
+                      lastAngle = lastAngle === null ? bestAngle : lastAngle * 0.65 + bestAngle * 0.35;
+                      angleDisplay.textContent = Math.round(lastAngle) + '°';
+
+                      if (lastAngle > STAND_ANGLE) {
+                          if (repetitionPhase === 'down') {
+                              repetitions += 1;
+                              counterDisplay.textContent = String(repetitions);
+                              repetitionPhase = 'up';
+                              setFeedback('¡Repetición contada! Baja de forma controlada.', 'text-emerald-300');
+                          } else {
+                              repetitionPhase = 'up';
+                              setFeedback('De pie detectado. Empieza la sentadilla.', 'text-emerald-300');
+                          }
+                      } else if (lastAngle < DOWN_ANGLE && repetitionPhase === 'up') {
+                          repetitionPhase = 'down';
+                          setFeedback('Posición baja alcanzada. Sube de nuevo.', 'text-yellow-300');
+                      } else if (repetitionPhase === 'waiting') {
+                          setFeedback('Ponte de pie, de perfil, con el cuerpo completo en el encuadre.', 'text-zinc-300');
+                      }
+                      ctx.restore();
+                  }
+
+                  async function initializePose() {
+                      if (pose) return pose;
+                      if (typeof window.Pose !== 'function') {
+                          throw new Error('No se pudo cargar el módulo de seguimiento. Revisa tu conexión y recarga la página.');
+                      }
+                      loadingOverlay.classList.remove('hidden');
+                      setStatus('Cargando modelo…', 'bg-zinc-800 text-yellow-300 border-zinc-700');
+                      const instance = new window.Pose({
+                          locateFile: function(file) {
+                              return 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@' + POSE_VERSION + '/' + file;
+                          }
+                      });
+                      instance.setOptions({
+                          modelComplexity: 1,
+                          smoothLandmarks: true,
+                          enableSegmentation: false,
+                          minDetectionConfidence: 0.55,
+                          minTrackingConfidence: 0.55
+                      });
+                      instance.onResults(updatePose);
+                      await instance.initialize();
+                      pose = instance;
+                      return pose;
+                  }
+
+                  async function processVideo() {
+                      animationFrame = null;
+                      if (!video.srcObject && !video.src) return;
+                      if (!sendingFrame && video.readyState >= 2 && !video.paused) {
+                          sendingFrame = true;
+                          try {
+                              await pose.send({ image: video });
+                          } catch (error) {
+                              consecutiveErrors += 1;
+                              if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                                  setStatus('Error de lectura', 'bg-red-950 text-red-300 border-red-800');
+                                  setFeedback('El análisis se detuvo: ' + error.message, 'text-red-300');
+                                  sendingFrame = false;
+                                  return;
+                              }
+                          } finally {
+                              sendingFrame = false;
+                          }
+                      }
+                      animationFrame = window.requestAnimationFrame(processVideo);
+                  }
+
+                  function stopCamera() {
+                      if (animationFrame !== null) {
+                          window.cancelAnimationFrame(animationFrame);
+                          animationFrame = null;
+                      }
+                      if (cameraStream) {
+                          cameraStream.getTracks().forEach(function(track) { track.stop(); });
+                          cameraStream = null;
+                      }
+                      video.pause();
+                      video.srcObject = null;
+                      video.removeAttribute('src');
+                      video.loop = false;
+                      video.load();
+                      if (currentObjectUrl) {
+                          URL.revokeObjectURL(currentObjectUrl);
+                          currentObjectUrl = null;
+                      }
+                      sendingFrame = false;
+                      loadingOverlay.classList.add('hidden');
+                      releaseWakeLock();
+                      clearCanvas();
+                      stopCameraButton.classList.add('hidden');
+                      switchCamButton.classList.add('hidden');
+                      setStatus('En espera', 'bg-zinc-800 text-zinc-400 border-zinc-700');
+                  }
+
+                  function resetAnalysis() {
+                      repetitions = 0;
+                      repetitionPhase = 'waiting';
+                      lastAngle = null;
+                      lastSide = null;
+                      consecutiveErrors = 0;
+                      counterDisplay.textContent = '0';
+                      angleDisplay.textContent = '—';
+                  }
+
+                  async function startCamera(mode) {
+                      if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                          showModalError('Esta página se abrió desde WhatsApp o un archivo y el navegador bloquea la cámara en vivo. Usa "Grabar video con la cámara del celular" o "Subir video o foto de la galería", o abre la página con HTTPS.');
+                          return;
+                      }
+                      try {
+                          stopCamera();
+                          resetAnalysis();
+                          modalFeedback.classList.add('hidden');
+                          facingMode = mode;
+                          cameraStream = await navigator.mediaDevices.getUserMedia({
+                              audio: false,
+                              video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+                          });
+                          setMirror(facingMode === 'user');
+                          video.srcObject = cameraStream;
+                          await video.play();
+                          modal.classList.add('hidden');
+                          stopCameraButton.classList.remove('hidden');
+                          switchCamButton.classList.remove('hidden');
+                          requestWakeLock();
+                          await initializePose();
+                          setStatus(facingMode === 'user' ? 'Cámara frontal' : 'Cámara trasera', 'bg-emerald-950 text-emerald-300 border-emerald-800');
+                          setFeedback('Ponte de perfil, de pie, con el cuerpo completo en el encuadre.', 'text-emerald-300');
+                          animationFrame = window.requestAnimationFrame(processVideo);
+                      } catch (error) {
+                          stopCamera();
+                          modal.classList.remove('hidden');
+                          setStatus('Sin cámara', 'bg-red-950 text-red-300 border-red-800');
+                          const detail = error.name === 'NotAllowedError'
+                              ? 'Permite el acceso a la cámara en el navegador y vuelve a intentarlo.'
+                              : error.message;
+                          showModalError('No se pudo iniciar la cámara: ' + detail);
+                      }
+                  }
+
+                  async function handleFileSelect(event) {
+                      const file = event.target.files && event.target.files[0];
+                      if (!file) return;
+                      try {
+                          stopCamera();
+                          resetAnalysis();
+                          setMirror(false);
+                          modalFeedback.classList.add('hidden');
+                          modal.classList.add('hidden');
+                          await initializePose();
+                          currentObjectUrl = URL.createObjectURL(file);
+                          stopCameraButton.classList.remove('hidden');
+                          setStatus('Archivo cargado', 'bg-emerald-950 text-emerald-300 border-emerald-800');
+                          if (file.type.startsWith('video/')) {
+                              video.src = currentObjectUrl;
+                              video.loop = true;
+                              await video.play();
+                              requestWakeLock();
+                              setFeedback('Analizando video. Mantén visible el cuerpo completo.', 'text-emerald-300');
+                              animationFrame = window.requestAnimationFrame(processVideo);
+                          } else if (file.type.startsWith('image/')) {
+                              const image = new Image();
+                              image.onload = async function() {
+                                  try {
+                                      await pose.send({ image: image });
+                                  } catch (error) {
+                                      setFeedback('No se pudo procesar la imagen: ' + error.message, 'text-red-300');
+                                  }
+                              };
+                              image.onerror = function() {
+                                  setFeedback('No se pudo abrir la imagen seleccionada.', 'text-red-300');
+                              };
+                              image.src = currentObjectUrl;
+                              setFeedback('Analizando imagen. Para contar repeticiones, usa un video o la cámara.', 'text-emerald-300');
+                          } else {
+                              throw new Error('Selecciona un archivo de imagen o video compatible.');
+                          }
+                      } catch (error) {
+                          stopCamera();
+                          modal.classList.remove('hidden');
+                          showModalError('No se pudo abrir el archivo: ' + error.message);
+                      } finally {
+                          event.target.value = '';
+                      }
+                  }
+
+                  /* Cronómetro */
+                  function formatTime(totalSeconds) {
+                      const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+                      const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+                      return minutes + ':' + seconds;
+                  }
+
+                  function renderTimer() {
+                      const elapsed = timerElapsed + (timerStartedAt ? (Date.now() - timerStartedAt) / 1000 : 0);
+                      document.getElementById('timer').textContent = formatTime(Math.floor(elapsed));
+                  }
+
+                  function startTimer() {
+                      if (timerInterval) return;
+                      timerStartedAt = Date.now();
+                      timerInterval = window.setInterval(renderTimer, 250);
+                  }
+
+                  function pauseTimer() {
+                      if (!timerInterval) return;
+                      timerElapsed += (Date.now() - timerStartedAt) / 1000;
+                      timerStartedAt = 0;
+                      window.clearInterval(timerInterval);
+                      timerInterval = null;
+                      renderTimer();
+                  }
+
+                  function resetTimer() {
+                      if (timerInterval) window.clearInterval(timerInterval);
+                      timerInterval = null;
+                      timerStartedAt = 0;
+                      timerElapsed = 0;
+                      renderTimer();
+                  }
+
+                  /* Eventos */
+                  document.getElementById('start-front-btn').addEventListener('click', function() { startCamera('user'); });
+                  document.getElementById('start-back-btn').addEventListener('click', function() { startCamera('environment'); });
+                  switchCamButton.addEventListener('click', function() {
+                      startCamera(facingMode === 'user' ? 'environment' : 'user');
+                  });
+                  stopCameraButton.addEventListener('click', function() {
+                      stopCamera();
+                      modal.classList.remove('hidden');
+                  });
+                  document.getElementById('file-btn-modal').addEventListener('click', function() {
+                      document.getElementById('file-input-modal').click();
+                  });
+                  document.getElementById('file-btn-main').addEventListener('click', function() {
+                      document.getElementById('file-input-main').click();
+                  });
+                  document.getElementById('record-btn-modal').addEventListener('click', function() {
+                      document.getElementById('file-input-record').click();
+                  });
+                  document.getElementById('file-input-record').addEventListener('change', handleFileSelect);
+                  document.getElementById('file-input-modal').addEventListener('change', handleFileSelect);
+                  document.getElementById('file-input-main').addEventListener('change', handleFileSelect);
+                  document.getElementById('reset-counter-btn').addEventListener('click', function() {
+                      resetAnalysis();
+                      setFeedback('Contador reiniciado. Ponte de pie para comenzar.', 'text-zinc-300');
+                  });
+                  document.getElementById('timer-play').addEventListener('click', startTimer);
+                  document.getElementById('timer-pause').addEventListener('click', pauseTimer);
+                  document.getElementById('timer-reset').addEventListener('click', resetTimer);
+                  window.addEventListener('beforeunload', stopCamera);
+              </script>
+          </body>
+          </html>
+
+          VELOCITY_HTML_EOF
+
+
+      - name: Compilar APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Preparar APK y codigo QR
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk velocity.apk
+          pip install "qrcode[pil]"
+          URL="https://github.com/${{ github.repository }}/releases/latest/download/velocity.apk"
+          python3 -c "import qrcode,sys; qrcode.make(sys.argv[1]).save('qr.png')" "$URL"
+          echo "Enlace de descarga: $URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar descarga
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ github.run_number }}" velocity.apk qr.png \
+            --title "Velocity v${{ github.run_number }}" \
+            --notes "Descarga velocity.apk en el celular e instalalo. Tambien puedes escanear qr.png." \
+            --latest
