@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#030303">
+    <title>Proyecttec Elite - Análisis visual de sentadillas</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        :root {
+            --panel: rgba(20, 20, 23, 0.94);
+            --panel-2: rgba(11, 11, 13, 0.82);
+        }
+        * { box-sizing: border-box; }
+        html { -webkit-tap-highlight-color: transparent; }
+        body {
+            background-color: #030303;
+            background-image: radial-gradient(circle at 50% -10%, rgba(242, 201, 76, 0.09), transparent 40%);
+            color: #f3f4f6;
+            letter-spacing: 0.01em;
+        }
+        button, input { touch-action: manipulation; }
+        button { transition: transform .16s ease, background-color .16s ease, opacity .16s ease; }
+        button:active { transform: scale(.97); }
+        button:focus-visible { outline: 2px solid #facc15; outline-offset: 2px; }
+        .app-shell {
+            width: 100%;
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 14px 10px calc(20px + env(safe-area-inset-bottom));
+        }
+        .panel {
+            background: var(--panel);
+            border: 1px solid rgba(242, 201, 76, 0.18);
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
+        }
+        .panel-subtle {
+            background: var(--panel-2);
+            border: 1px solid rgba(255, 255, 255, 0.055);
+        }
+        .gold-border { border-color: rgba(212, 175, 55, 0.35); }
+        .metric-value { font-variant-numeric: tabular-nums; }
+        .video-frame { background: #080808; aspect-ratio: 3 / 4; max-height: 72vh; margin: 0 auto; }
+        @media (min-width: 900px) { .video-frame { aspect-ratio: 16 / 9; max-height: none; } }
+        @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+    </style>
+</head>
+<body class="font-sans min-h-screen">
+
+    <!-- MODAL DE INICIO -->
+    <div id="privacy-modal" class="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+        <div class="panel max-w-md w-full p-5 rounded-2xl text-center">
+            <h2 class="text-xl font-bold text-yellow-400 mb-1">Proyecttec Elite</h2>
+            <p class="text-sm text-zinc-300 leading-relaxed mb-4">
+                Análisis visual de sentadillas con la cámara del celular. Elige cómo empezar:
+            </p>
+
+            <div class="space-y-3 mb-4">
+                <button id="start-front-btn" class="w-full py-3.5 bg-gradient-to-r from-yellow-500 to-amber-600 text-black font-extrabold text-sm rounded-xl">
+                    Usar cámara frontal (para verme)
+                </button>
+                <button id="start-back-btn" class="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-yellow-400 border border-amber-500/40 font-bold text-sm rounded-xl">
+                    Usar cámara trasera
+                </button>
+                <p class="text-xs text-zinc-400">
+                    El navegador pedirá permiso: toca <strong class="text-yellow-400">Permitir</strong>. Si ya lo bloqueaste, activa la cámara en los permisos del sitio.
+                </p>
+
+                <input type="file" id="file-input-record" accept="video/*" capture="user" class="hidden">
+                <button id="record-btn-modal" class="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-yellow-400 border border-amber-500/40 font-bold text-sm rounded-xl">
+                    Grabar video con la cámara del celular
+                </button>
+                <input type="file" id="file-input-modal" accept="video/*,image/*" class="hidden">
+                <button id="file-btn-modal" class="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold text-sm rounded-xl">
+                    Subir video o foto de la galería
+                </button>
+            </div>
+
+            <p id="modal-feedback" class="hidden text-xs text-red-300 mb-3" role="alert"></p>
+            <div class="p-3 bg-black/50 rounded-lg border border-zinc-800 text-xs text-zinc-400 text-left">
+                El análisis se hace en tu dispositivo; el video no se envía a ningún servidor. Se necesita conexión la primera vez para descargar el modelo de seguimiento.
+            </div>
+        </div>
+    </div>
+
+    <!-- REPRODUCTOR DE VIDEO GUARDADO -->
+    <div id="video-modal" class="hidden fixed inset-0 bg-black/95 z-[60] flex items-center justify-center p-4">
+        <div class="panel max-w-md w-full p-4 rounded-2xl">
+            <video id="playback-video" class="w-full rounded-xl bg-black max-h-[60vh]" controls playsinline></video>
+            <div class="flex gap-2 mt-3">
+                <button id="video-download-btn" class="flex-1 py-2.5 bg-amber-500 text-black font-bold text-sm rounded-xl">Descargar video</button>
+                <button id="video-close-btn" class="flex-1 py-2.5 bg-zinc-800 text-zinc-200 border border-zinc-700 text-sm rounded-xl">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-shell">
+        <header class="w-full text-center mb-3">
+            <h1 class="text-2xl sm:text-3xl md:text-5xl font-black tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-500 to-yellow-600">
+                PROYECTTEC <span class="text-white text-base md:text-xl font-light">ELITE</span>
+            </h1>
+            <p class="text-amber-500/80 text-xs mt-1">Análisis visual de sentadillas</p>
+        </header>
+
+        <main class="w-full grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-5">
+
+            <!-- VISOR -->
+            <div class="lg:col-span-2 flex flex-col panel p-3 sm:p-4 rounded-2xl">
+                <div class="flex flex-wrap justify-between items-center mb-2 gap-2">
+                    <h2 class="text-sm font-bold text-yellow-400">Visor</h2>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button id="switch-cam-btn" class="hidden text-xs bg-zinc-800 hover:bg-amber-500 hover:text-black text-amber-400 border gold-border px-3 py-1.5 rounded-full font-semibold">
+                            Cambiar cámara
+                        </button>
+                        <input type="file" id="file-input-main" accept="video/*,image/*" class="hidden">
+                        <button id="file-btn-main" class="text-xs bg-zinc-800 hover:bg-amber-500 hover:text-black text-amber-400 border gold-border px-3 py-1.5 rounded-full font-semibold">
+                            Galería
+                        </button>
+                        <span id="status-badge" class="text-xs bg-zinc-800 text-zinc-400 border border-zinc-700 px-2.5 py-1 rounded-full" aria-live="polite">En espera</span>
+                    </div>
+                </div>
+
+                <div class="video-frame relative w-full rounded-xl overflow-hidden border border-zinc-800 flex items-center justify-center">
+                    <video id="input_video" class="hidden" autoplay muted playsinline webkit-playsinline></video>
+                    <canvas id="output_canvas" class="w-full h-full object-contain"></canvas>
+                    <div id="loading-overlay" class="hidden absolute inset-0 bg-black/70 flex items-center justify-center text-sm text-yellow-300 text-center p-4">
+                        Cargando el modelo de seguimiento…<br>la primera vez puede tardar unos segundos.
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2 mt-3 text-center items-stretch">
+                    <div class="panel-subtle p-2 rounded-xl flex flex-col justify-center min-h-[92px]">
+                        <span class="block text-zinc-400 text-xs">Repeticiones</span>
+                        <span id="counter" class="metric-value text-2xl font-black text-yellow-400">0</span>
+                        <button id="reset-counter-btn" class="block mx-auto mt-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded">
+                            Reiniciar
+                        </button>
+                    </div>
+                    <div class="panel-subtle p-2 rounded-xl flex flex-col justify-center min-h-[92px]">
+                        <span class="block text-zinc-400 text-xs">Ángulo de rodilla</span>
+                        <span id="angle-display" class="metric-value text-2xl font-black text-amber-400">—</span>
+                    </div>
+                    <div class="panel-subtle p-2 rounded-xl flex flex-col items-center justify-center min-h-[92px]">
+                        <span class="block text-zinc-400 text-xs">Cronómetro</span>
+                        <span id="timer" class="metric-value text-lg font-black text-emerald-400 my-0.5">00:00</span>
+                        <div class="flex gap-1">
+                            <button id="timer-play" class="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-black font-bold text-xs rounded">Iniciar</button>
+                            <button id="timer-pause" class="px-2 py-1 bg-yellow-600 hover:bg-yellow-500 text-black font-bold text-xs rounded">Pausa</button>
+                            <button id="timer-reset" class="px-2 py-1 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded">Cero</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-3 p-3 rounded-xl bg-black/50 border border-zinc-800 text-center">
+                    <span id="feedback" class="text-sm font-semibold text-zinc-400" aria-live="polite">Autoriza la cámara o carga un archivo para empezar.</span>
+                </div>
+            </div>
+
+            <!-- GUÍA -->
+            <div class="panel p-4 rounded-2xl flex flex-col justify-between">
+                <div>
+                    <h2 class="text-sm font-bold text-yellow-400 mb-3">Cómo usarlo</h2>
+                    <p class="text-sm text-zinc-300 leading-relaxed mb-3">
+                        La cámara estima puntos del cuerpo para mostrar el ángulo aproximado de la rodilla y contar repeticiones. Es una ayuda visual: no reemplaza la evaluación de un profesional.
+                    </p>
+                    <div class="p-3 bg-black/50 rounded-xl border border-zinc-800 text-xs text-zinc-300 leading-relaxed space-y-1.5">
+                        <p><strong class="text-yellow-400">Posición:</strong> apoya el celular en vertical sobre una superficie estable, a 2–3 metros, y colócate de perfil.</p>
+                        <p><strong class="text-yellow-400">Encuadre:</strong> que se vean cabeza, cadera, rodillas y pies, con buena luz.</p>
+                        <p><strong class="text-yellow-400">Conteo:</strong> cuenta una repetición al bajar de ~110° y volver a ~155° o más.</p>
+                        <p><strong class="text-yellow-400">Resultados:</strong> al terminar toca <em>Guardar sentadilla</em> (queda en el historial con su video) o <em>Exportar PDF</em>.</p>
+                    </div>
+                </div>
+                <button id="stop-camera-btn" class="hidden mt-4 w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-sm rounded-xl">
+                    Detener y volver al inicio
+                </button>
+            </div>
+        </main>
+
+        <section class="panel p-3 sm:p-4 rounded-2xl mt-3 md:mt-5">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <h2 class="text-sm font-bold text-yellow-400">Resultados de la sentadilla</h2>
+                <span id="session-summary" class="text-xs text-zinc-400">Sin repeticiones</span>
+            </div>
+            <p class="text-xs text-zinc-400 mb-2">Ángulo mínimo de la rodilla en cada repetición (más bajo = más profundo). La línea punteada marca 90°.</p>
+            <div class="panel-subtle rounded-xl p-2">
+                <canvas id="chart-canvas" class="block w-full" style="height:220px"></canvas>
+            </div>
+            <div class="grid grid-cols-3 gap-2 mt-3 text-center">
+                <div class="panel-subtle p-2 rounded-xl"><span class="block text-zinc-400 text-xs">Promedio</span><span id="stat-avg" class="metric-value text-lg font-black text-yellow-400">—</span></div>
+                <div class="panel-subtle p-2 rounded-xl"><span class="block text-zinc-400 text-xs">Más profunda</span><span id="stat-min" class="metric-value text-lg font-black text-emerald-400">—</span></div>
+                <div class="panel-subtle p-2 rounded-xl"><span class="block text-zinc-400 text-xs">Menos profunda</span><span id="stat-max" class="metric-value text-lg font-black text-amber-400">—</span></div>
+            </div>
+            <label class="flex items-center gap-2 mt-3 text-xs text-zinc-300">
+                <input type="checkbox" id="record-toggle" checked class="accent-yellow-500">
+                Grabar el video del análisis para guardarlo con la sentadilla
+            </label>
+            <div class="grid grid-cols-2 gap-2 mt-3">
+                <button id="save-session-btn" class="py-3 bg-gradient-to-r from-yellow-500 to-amber-600 text-black font-extrabold text-sm rounded-xl disabled:opacity-50">Guardar sentadilla</button>
+                <button id="export-pdf-btn" class="py-3 bg-zinc-800 hover:bg-zinc-700 text-yellow-400 border border-amber-500/40 font-bold text-sm rounded-xl">Exportar PDF</button>
+            </div>
+        </section>
+
+        <section class="panel p-3 sm:p-4 rounded-2xl mt-3 md:mt-5">
+            <h2 class="text-sm font-bold text-yellow-400 mb-2">Historial</h2>
+            <p id="history-empty" class="text-xs text-zinc-400">Aún no hay sentadillas guardadas.</p>
+            <div id="history-list"></div>
+        </section>
+
+        <footer class="w-full text-center text-xs text-zinc-500 mt-4">
+            Mantén el teléfono fijo y el área de movimiento despejada.
+        </footer>
+    </div>
+
+    <script>
+        const POSE_VERSION = '0.5.1675469404';
+        const STAND_ANGLE = 155;
+        const DOWN_ANGLE = 110;
+        const MAX_CONSECUTIVE_ERRORS = 5;
+
+        const video = document.getElementById('input_video');
+        const canvas = document.getElementById('output_canvas');
+        const ctx = canvas.getContext('2d');
+        const statusBadge = document.getElementById('status-badge');
+        const feedback = document.getElementById('feedback');
+        const modalFeedback = document.getElementById('modal-feedback');
+        const angleDisplay = document.getElementById('angle-display');
+        const counterDisplay = document.getElementById('counter');
+        const modal = document.getElementById('privacy-modal');
+        const stopCameraButton = document.getElementById('stop-camera-btn');
+        const switchCamButton = document.getElementById('switch-cam-btn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        let pose = null;
+        let cameraStream = null;
+        let facingMode = 'user';
+        let animationFrame = null;
+        let sendingFrame = false;
+        let currentObjectUrl = null;
+        let wakeLock = null;
+        let consecutiveErrors = 0;
+        let lastAngle = null;
+        let lastSide = null;
+        let repetitionPhase = 'waiting';
+        let repetitions = 0;
+        let timerInterval = null;
+        let timerStartedAt = 0;
+        let timerElapsed = 0;
+        let repData = [];
+        let repMin = Infinity;
+        let sessionStart = null;
+        let stillImage = false;
+        let recorder = null;
+        let recChunks = [];
+        let recBytes = 0;
+        let recToken = 0;
+        let pendingVideo = null;
+
+        function setStatus(text, colorClass) {
+            statusBadge.textContent = text;
+            statusBadge.className = 'text-xs border px-2.5 py-1 rounded-full ' + colorClass;
+        }
+
+        function setFeedback(text, colorClass) {
+            feedback.textContent = text;
+            feedback.className = 'text-sm font-semibold ' + colorClass;
+        }
+
+        function setMirror(on) {
+            canvas.classList.toggle('-scale-x-100', on);
+        }
+
+        function showModalError(text) {
+            modalFeedback.textContent = text;
+            modalFeedback.className = 'text-xs text-red-300 mb-3';
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        /* Ángulo en el vértice b, calculado en píxeles para no deformarlo por la proporción del video */
+        function calculateAngle(a, b, c) {
+            const w = canvas.width;
+            const h = canvas.height;
+            const abx = (a.x - b.x) * w;
+            const aby = (a.y - b.y) * h;
+            const cbx = (c.x - b.x) * w;
+            const cby = (c.y - b.y) * h;
+            const denominator = Math.hypot(abx, aby) * Math.hypot(cbx, cby);
+            if (!denominator) return null;
+            const cosine = Math.max(-1, Math.min(1, (abx * cbx + aby * cby) / denominator));
+            return Math.acos(cosine) * (180 / Math.PI);
+        }
+
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator && !wakeLock) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    wakeLock.addEventListener('release', function() { wakeLock = null; });
+                }
+            } catch (error) { /* opcional: si falla, la pantalla puede apagarse */ }
+        }
+
+        function releaseWakeLock() {
+            if (wakeLock) {
+                wakeLock.release().catch(function() {});
+                wakeLock = null;
+            }
+        }
+
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible' && (cameraStream || video.src)) requestWakeLock();
+        });
+
+        function updatePose(results) {
+            const image = results.image;
+            if (!image) return;
+            loadingOverlay.classList.add('hidden');
+            consecutiveErrors = 0;
+
+            const width = image.videoWidth || image.naturalWidth || image.width;
+            const height = image.videoHeight || image.naturalHeight || image.height;
+            if (width && height && (canvas.width !== width || canvas.height !== height)) {
+                canvas.width = width;
+                canvas.height = height;
+            }
+
+            if (!sessionStart) sessionStart = Date.now();
+            startRecording();
+
+            ctx.save();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+            const landmarks = results.poseLandmarks;
+            if (!landmarks) {
+                lastAngle = null;
+                angleDisplay.textContent = '—';
+                setFeedback('No se detecta el cuerpo. Ajusta la posición y la luz.', 'text-yellow-300');
+                ctx.restore();
+                return;
+            }
+
+            if (window.drawConnectors && window.drawLandmarks) {
+                window.drawConnectors(ctx, landmarks, window.POSE_CONNECTIONS, {
+                    color: '#facc15',
+                    lineWidth: Math.max(2, canvas.width / 240)
+                });
+                window.drawLandmarks(ctx, landmarks, {
+                    color: '#ffffff',
+                    lineWidth: 1,
+                    radius: Math.max(2, canvas.width / 180)
+                });
+            }
+
+            const sides = [
+                { name: 'left', hip: 23, knee: 25, ankle: 27 },
+                { name: 'right', hip: 24, knee: 26, ankle: 28 }
+            ];
+            let bestAngle = null;
+            let bestVisibility = 0;
+            let bestSide = null;
+            for (const side of sides) {
+                const hip = landmarks[side.hip];
+                const knee = landmarks[side.knee];
+                const ankle = landmarks[side.ankle];
+                const visibility = Math.min(
+                    hip.visibility == null ? 1 : hip.visibility,
+                    knee.visibility == null ? 1 : knee.visibility,
+                    ankle.visibility == null ? 1 : ankle.visibility
+                );
+                if (visibility >= 0.5 && visibility > bestVisibility) {
+                    bestAngle = calculateAngle(hip, knee, ankle);
+                    bestVisibility = visibility;
+                    bestSide = side.name;
+                }
+            }
+
+            if (bestAngle === null) {
+                lastAngle = null;
+                angleDisplay.textContent = '—';
+                setFeedback('No se ven bien cadera, rodilla y tobillo. Aléjate un poco del celular.', 'text-yellow-300');
+                ctx.restore();
+                return;
+            }
+
+            if (bestSide !== lastSide) {
+                lastAngle = null; // evita saltos al cambiar de pierna
+                lastSide = bestSide;
+            }
+            lastAngle = lastAngle === null ? bestAngle : lastAngle * 0.65 + bestAngle * 0.35;
+            angleDisplay.textContent = Math.round(lastAngle) + '°';
+            if (lastAngle <= STAND_ANGLE) repMin = Math.min(repMin, lastAngle);
+
+            if (lastAngle > STAND_ANGLE) {
+                const completedMin = repMin;
+                repMin = Infinity;
+                if (repetitionPhase === 'down') {
+                    repetitions += 1;
+                    counterDisplay.textContent = String(repetitions);
+                    repData.push({ n: repetitions, angle: completedMin, t: (Date.now() - sessionStart) / 1000 });
+                    renderResults();
+                    repetitionPhase = 'up';
+                    setFeedback('¡Repetición contada! Baja de forma controlada.', 'text-emerald-300');
+                } else {
+                    repetitionPhase = 'up';
+                    setFeedback('De pie detectado. Empieza la sentadilla.', 'text-emerald-300');
+                }
+            } else if (lastAngle < DOWN_ANGLE && repetitionPhase === 'up') {
+                repetitionPhase = 'down';
+                setFeedback('Posición baja alcanzada. Sube de nuevo.', 'text-yellow-300');
+            } else if (repetitionPhase === 'waiting') {
+                setFeedback('Ponte de pie, de perfil, con el cuerpo completo en el encuadre.', 'text-zinc-300');
+            }
+            ctx.restore();
+        }
+
+        async function initializePose() {
+            if (pose) return pose;
+            if (typeof window.Pose !== 'function') {
+                throw new Error('No se pudo cargar el módulo de seguimiento. Revisa tu conexión y recarga la página.');
+            }
+            loadingOverlay.classList.remove('hidden');
+            setStatus('Cargando modelo…', 'bg-zinc-800 text-yellow-300 border-zinc-700');
+            const instance = new window.Pose({
+                locateFile: function(file) {
+                    return 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@' + POSE_VERSION + '/' + file;
+                }
+            });
+            instance.setOptions({
+                modelComplexity: 1,
+                smoothLandmarks: true,
+                enableSegmentation: false,
+                minDetectionConfidence: 0.55,
+                minTrackingConfidence: 0.55
+            });
+            instance.onResults(updatePose);
+            await instance.initialize();
+            pose = instance;
+            return pose;
+        }
+
+        async function processVideo() {
+            animationFrame = null;
+            if (!video.srcObject && !video.src) return;
+            if (!sendingFrame && video.readyState >= 2 && !video.paused) {
+                sendingFrame = true;
+                try {
+                    await pose.send({ image: video });
+                } catch (error) {
+                    consecutiveErrors += 1;
+                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                        setStatus('Error de lectura', 'bg-red-950 text-red-300 border-red-800');
+                        setFeedback('El análisis se detuvo: ' + error.message, 'text-red-300');
+                        sendingFrame = false;
+                        return;
+                    }
+                } finally {
+                    sendingFrame = false;
+                }
+            }
+            animationFrame = window.requestAnimationFrame(processVideo);
+        }
+
+        function stopCamera() {
+            stopRecording();
+            if (animationFrame !== null) {
+                window.cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(function(track) { track.stop(); });
+                cameraStream = null;
+            }
+            video.pause();
+            video.srcObject = null;
+            video.removeAttribute('src');
+            video.loop = false;
+            video.load();
+            if (currentObjectUrl) {
+                URL.revokeObjectURL(currentObjectUrl);
+                currentObjectUrl = null;
+            }
+            sendingFrame = false;
+            loadingOverlay.classList.add('hidden');
+            releaseWakeLock();
+            clearCanvas();
+            stopCameraButton.classList.add('hidden');
+            switchCamButton.classList.add('hidden');
+            setStatus('En espera', 'bg-zinc-800 text-zinc-400 border-zinc-700');
+        }
+
+        function resetAnalysis() {
+            repetitions = 0;
+            repetitionPhase = 'waiting';
+            lastAngle = null;
+            lastSide = null;
+            consecutiveErrors = 0;
+            counterDisplay.textContent = '0';
+            angleDisplay.textContent = '—';
+            repData = [];
+            repMin = Infinity;
+            sessionStart = null;
+            discardRecording();
+            renderResults();
+        }
+
+        async function startCamera(mode) {
+            if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showModalError('Esta página se abrió desde WhatsApp o un archivo y el navegador bloquea la cámara en vivo. Usa "Grabar video con la cámara del celular" o "Subir video o foto de la galería", o abre la página con HTTPS.');
+                return;
+            }
+            try {
+                stopCamera();
+                resetAnalysis();
+                stillImage = false;
+                modalFeedback.classList.add('hidden');
+                facingMode = mode;
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+                setMirror(facingMode === 'user');
+                video.srcObject = cameraStream;
+                await video.play();
+                modal.classList.add('hidden');
+                stopCameraButton.classList.remove('hidden');
+                switchCamButton.classList.remove('hidden');
+                requestWakeLock();
+                await initializePose();
+                setStatus(facingMode === 'user' ? 'Cámara frontal' : 'Cámara trasera', 'bg-emerald-950 text-emerald-300 border-emerald-800');
+                setFeedback('Ponte de perfil, de pie, con el cuerpo completo en el encuadre.', 'text-emerald-300');
+                animationFrame = window.requestAnimationFrame(processVideo);
+            } catch (error) {
+                stopCamera();
+                modal.classList.remove('hidden');
+                setStatus('Sin cámara', 'bg-red-950 text-red-300 border-red-800');
+                const detail = error.name === 'NotAllowedError'
+                    ? 'Permite el acceso a la cámara en el navegador y vuelve a intentarlo.'
+                    : error.message;
+                showModalError('No se pudo iniciar la cámara: ' + detail);
+            }
+        }
+
+        async function handleFileSelect(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            try {
+                stopCamera();
+                resetAnalysis();
+                stillImage = file.type.startsWith('image/');
+                setMirror(false);
+                modalFeedback.classList.add('hidden');
+                modal.classList.add('hidden');
+                await initializePose();
+                currentObjectUrl = URL.createObjectURL(file);
+                stopCameraButton.classList.remove('hidden');
+                setStatus('Archivo cargado', 'bg-emerald-950 text-emerald-300 border-emerald-800');
+                if (file.type.startsWith('video/')) {
+                    video.src = currentObjectUrl;
+                    video.loop = true;
+                    await video.play();
+                    requestWakeLock();
+                    setFeedback('Analizando video. Mantén visible el cuerpo completo.', 'text-emerald-300');
+                    animationFrame = window.requestAnimationFrame(processVideo);
+                } else if (file.type.startsWith('image/')) {
+                    const image = new Image();
+                    image.onload = async function() {
+                        try {
+                            await pose.send({ image: image });
+                        } catch (error) {
+                            setFeedback('No se pudo procesar la imagen: ' + error.message, 'text-red-300');
+                        }
+                    };
+                    image.onerror = function() {
+                        setFeedback('No se pudo abrir la imagen seleccionada.', 'text-red-300');
+                    };
+                    image.src = currentObjectUrl;
+                    setFeedback('Analizando imagen. Para contar repeticiones, usa un video o la cámara.', 'text-emerald-300');
+                } else {
+                    throw new Error('Selecciona un archivo de imagen o video compatible.');
+                }
+            } catch (error) {
+                stopCamera();
+                modal.classList.remove('hidden');
+                showModalError('No se pudo abrir el archivo: ' + error.message);
+            } finally {
+                event.target.value = '';
+            }
+        }
+
+        /* Cronómetro */
+        function formatTime(totalSeconds) {
+            const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+            const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+            return minutes + ':' + seconds;
+        }
+
+        function renderTimer() {
+            const elapsed = timerElapsed + (timerStartedAt ? (Date.now() - timerStartedAt) / 1000 : 0);
+            document.getElementById('timer').textContent = formatTime(Math.floor(elapsed));
+        }
+
+        function startTimer() {
+            if (timerInterval) return;
+            timerStartedAt = Date.now();
+            timerInterval = window.setInterval(renderTimer, 250);
+        }
+
+        function pauseTimer() {
+            if (!timerInterval) return;
+            timerElapsed += (Date.now() - timerStartedAt) / 1000;
+            timerStartedAt = 0;
+            window.clearInterval(timerInterval);
+            timerInterval = null;
+            renderTimer();
+        }
+
+        function resetTimer() {
+            if (timerInterval) window.clearInterval(timerInterval);
+            timerInterval = null;
+            timerStartedAt = 0;
+            timerElapsed = 0;
+            renderTimer();
+        }
+
+        /* Eventos */
+        document.getElementById('start-front-btn').addEventListener('click', function() { startCamera('user'); });
+        document.getElementById('start-back-btn').addEventListener('click', function() { startCamera('environment'); });
+        switchCamButton.addEventListener('click', function() {
+            startCamera(facingMode === 'user' ? 'environment' : 'user');
+        });
+        document.getElementById('file-btn-modal').addEventListener('click', function() {
+            document.getElementById('file-input-modal').click();
+        });
+        document.getElementById('file-btn-main').addEventListener('click', function() {
+            document.getElementById('file-input-main').click();
+        });
+        document.getElementById('record-btn-modal').addEventListener('click', function() {
+            document.getElementById('file-input-record').click();
+        });
+        document.getElementById('file-input-record').addEventListener('change', handleFileSelect);
+        document.getElementById('file-input-modal').addEventListener('change', handleFileSelect);
+        document.getElementById('file-input-main').addEventListener('change', handleFileSelect);
+        document.getElementById('reset-counter-btn').addEventListener('click', function() {
+            resetAnalysis();
+            setFeedback('Contador reiniciado. Ponte de pie para comenzar.', 'text-zinc-300');
+        });
+        document.getElementById('timer-play').addEventListener('click', startTimer);
+        document.getElementById('timer-pause').addEventListener('click', pauseTimer);
+        document.getElementById('timer-reset').addEventListener('click', resetTimer);
+        /* ===== Resultados, historial, video y PDF ===== */
+        const chartCanvas = document.getElementById('chart-canvas');
+        const recordToggle = document.getElementById('record-toggle');
+        const saveSessionButton = document.getElementById('save-session-btn');
+        const historyList = document.getElementById('history-list');
+        const historyEmpty = document.getElementById('history-empty');
+        const videoModal = document.getElementById('video-modal');
+        const playbackVideo = document.getElementById('playback-video');
+        const RECORD_MAX_BYTES = 60 * 1000 * 1000;
+        const STORAGE_KEY = 'velocity_sessions';
+        let playbackUrl = null;
+        let playbackBlob = null;
+        let playbackSession = null;
+
+        function pad2(n) { return String(n).padStart(2, '0'); }
+
+        function formatDate(iso) {
+            const d = new Date(iso);
+            return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+        }
+
+        function fileStamp(iso) {
+            const d = new Date(iso);
+            return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes());
+        }
+
+        function fmtDur(seconds) {
+            const s = Math.max(0, Math.round(seconds || 0));
+            return pad2(Math.floor(s / 60)) + ':' + pad2(s % 60);
+        }
+
+        function statsOf(angles) {
+            if (!angles.length) return null;
+            let sum = 0, min = Infinity, max = -Infinity;
+            for (const a of angles) { sum += a; if (a < min) min = a; if (a > max) max = a; }
+            return { avg: sum / angles.length, min: min, max: max };
+        }
+
+        /* Gráfico de barras: ángulo mínimo de rodilla en cada repetición */
+        function drawBarChart(cv, angles, light, scale) {
+            const c = cv.getContext('2d');
+            const W = cv.width, H = cv.height;
+            const fg = light ? '#111827' : '#e5e7eb';
+            const grid = light ? '#d1d5db' : 'rgba(255,255,255,0.12)';
+            const barColor = light ? '#d97706' : '#facc15';
+            const refColor = light ? '#059669' : '#34d399';
+            c.clearRect(0, 0, W, H);
+            if (light) { c.fillStyle = '#ffffff'; c.fillRect(0, 0, W, H); }
+            const fs = Math.round(Math.max(11 * scale, H / 15));
+            const padL = fs * 2.6, padR = fs * 0.8, padT = fs * 1.6, padB = fs * 2.2;
+            const pw = W - padL - padR, ph = H - padT - padB;
+            c.font = fs + 'px sans-serif';
+            c.textBaseline = 'middle';
+            c.lineWidth = Math.max(1, scale);
+            for (let v = 0; v <= 180; v += 30) {
+                const y = padT + ph * (1 - v / 180);
+                c.strokeStyle = grid;
+                c.beginPath(); c.moveTo(padL, y); c.lineTo(W - padR, y); c.stroke();
+                c.fillStyle = fg; c.textAlign = 'right';
+                c.fillText(v + '°', padL - fs * 0.4, y);
+            }
+            const y90 = padT + ph * (1 - 90 / 180);
+            c.strokeStyle = refColor;
+            c.setLineDash([fs * 0.5, fs * 0.4]);
+            c.beginPath(); c.moveTo(padL, y90); c.lineTo(W - padR, y90); c.stroke();
+            c.setLineDash([]);
+            if (!angles.length) {
+                c.fillStyle = light ? '#6b7280' : '#9ca3af';
+                c.textAlign = 'center';
+                c.fillText('Sin repeticiones todavía', padL + pw / 2, padT + ph / 2);
+                return;
+            }
+            const n = angles.length;
+            const slot = pw / n;
+            const bw = Math.min(slot * 0.7, fs * 3.2);
+            const labelEvery = Math.max(1, Math.ceil(n / 30));
+            c.textAlign = 'center';
+            angles.forEach(function(a, i) {
+                const x = padL + slot * i + (slot - bw) / 2;
+                const h = ph * Math.max(0, Math.min(180, a)) / 180;
+                const y = padT + ph - h;
+                c.fillStyle = barColor;
+                c.fillRect(x, y, bw, h);
+                c.fillStyle = fg;
+                if (slot >= fs * 1.5) {
+                    c.font = Math.round(fs * 0.9) + 'px sans-serif';
+                    c.fillText(Math.round(a) + '°', x + bw / 2, y - fs * 0.7);
+                }
+                if (i % labelEvery === 0) {
+                    c.font = fs + 'px sans-serif';
+                    c.fillText(String(i + 1), x + bw / 2, padT + ph + fs * 1.1);
+                }
+            });
+            c.font = fs + 'px sans-serif';
+            c.fillStyle = light ? '#6b7280' : '#9ca3af';
+            c.textAlign = 'left';
+            c.fillText('Repetición', padL, H - fs * 0.35);
+        }
+
+        function sizeCanvas(cv) {
+            const dpr = window.devicePixelRatio || 1;
+            const w = Math.max(280, Math.round(cv.clientWidth * dpr));
+            const h = Math.max(120, Math.round(cv.clientHeight * dpr));
+            if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+        }
+
+        function renderResults() {
+            const angles = repData.map(function(r) { return r.angle; });
+            sizeCanvas(chartCanvas);
+            drawBarChart(chartCanvas, angles, false, window.devicePixelRatio || 1);
+            const st = statsOf(angles);
+            document.getElementById('stat-avg').textContent = st ? Math.round(st.avg) + '°' : '—';
+            document.getElementById('stat-min').textContent = st ? Math.round(st.min) + '°' : '—';
+            document.getElementById('stat-max').textContent = st ? Math.round(st.max) + '°' : '—';
+            document.getElementById('session-summary').textContent = angles.length ? angles.length + (angles.length === 1 ? ' repetición' : ' repeticiones') : 'Sin repeticiones';
+        }
+
+        /* Grabación del video analizado (con el esqueleto dibujado) */
+        function pickMime() {
+            const options = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+            for (const m of options) {
+                if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+            }
+            return '';
+        }
+
+        function startRecording() {
+            if (recorder || pendingVideo || stillImage || !recordToggle.checked) return;
+            if (!window.MediaRecorder || !canvas.captureStream) return;
+            try {
+                const mime = pickMime();
+                const options = { videoBitsPerSecond: 1500000 };
+                if (mime) options.mimeType = mime;
+                const rec = new MediaRecorder(canvas.captureStream(24), options);
+                const token = ++recToken;
+                const type = rec.mimeType || mime || 'video/webm';
+                recChunks = [];
+                recBytes = 0;
+                rec.ondataavailable = function(e) {
+                    if (token !== recToken || !e.data || !e.data.size) return;
+                    recChunks.push(e.data);
+                    recBytes += e.data.size;
+                    if (recBytes > RECORD_MAX_BYTES && recorder === rec) stopRecording();
+                };
+                rec.onstop = function() {
+                    if (token !== recToken) return;
+                    pendingVideo = recChunks.length ? new Blob(recChunks, { type: type }) : null;
+                    recChunks = [];
+                };
+                rec.start(1000);
+                recorder = rec;
+            } catch (error) {
+                recorder = null;
+            }
+        }
+
+        function stopRecording() {
+            return new Promise(function(resolve) {
+                if (!recorder) { resolve(pendingVideo); return; }
+                const rec = recorder;
+                recorder = null;
+                const previous = rec.onstop;
+                rec.onstop = function() { if (previous) previous(); resolve(pendingVideo); };
+                try { rec.stop(); } catch (error) { resolve(pendingVideo); }
+            });
+        }
+
+        function discardRecording() {
+            recToken++;
+            if (recorder) {
+                const rec = recorder;
+                recorder = null;
+                rec.onstop = null;
+                rec.ondataavailable = null;
+                try { rec.stop(); } catch (error) { /* ya detenido */ }
+            }
+            recChunks = [];
+            pendingVideo = null;
+        }
+
+        /* Videos guardados (IndexedDB) y datos de cada sentadilla (localStorage) */
+        function openDb() {
+            return new Promise(function(resolve, reject) {
+                const request = indexedDB.open('velocity-db', 1);
+                request.onupgradeneeded = function() { request.result.createObjectStore('videos'); };
+                request.onsuccess = function() { resolve(request.result); };
+                request.onerror = function() { reject(request.error); };
+            });
+        }
+
+        async function idbPut(key, value) {
+            const db = await openDb();
+            return new Promise(function(resolve, reject) {
+                const tx = db.transaction('videos', 'readwrite');
+                tx.objectStore('videos').put(value, key);
+                tx.oncomplete = function() { resolve(); };
+                tx.onerror = function() { reject(tx.error); };
+            });
+        }
+
+        async function idbGet(key) {
+            const db = await openDb();
+            return new Promise(function(resolve, reject) {
+                const request = db.transaction('videos', 'readonly').objectStore('videos').get(key);
+                request.onsuccess = function() { resolve(request.result || null); };
+                request.onerror = function() { reject(request.error); };
+            });
+        }
+
+        async function idbDelete(key) {
+            const db = await openDb();
+            return new Promise(function(resolve, reject) {
+                const tx = db.transaction('videos', 'readwrite');
+                tx.objectStore('videos').delete(key);
+                tx.oncomplete = function() { resolve(); };
+                tx.onerror = function() { reject(tx.error); };
+            });
+        }
+
+        function loadSessions() {
+            try {
+                const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                return Array.isArray(list) ? list : [];
+            } catch (error) { return []; }
+        }
+
+        function storeSessions(list) {
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); return true; }
+            catch (error) { return false; }
+        }
+
+        /* Guardar archivos: puente nativo en la app Android, descarga normal en el navegador */
+        function saveBlob(blob, name) {
+            if (window.AndroidBridge && window.AndroidBridge.saveFile) {
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    const base64 = String(reader.result).split(',')[1] || '';
+                    window.AndroidBridge.saveFile(name, blob.type || 'application/octet-stream', base64);
+                };
+                reader.readAsDataURL(blob);
+                return;
+            }
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = name;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(function() { URL.revokeObjectURL(url); }, 10000);
+            setFeedback('Archivo descargado: ' + name, 'text-emerald-300');
+        }
+
+        function videoExt(blob) { return (blob.type || '').indexOf('mp4') >= 0 ? '.mp4' : '.webm'; }
+
+        function currentSession() {
+            return {
+                date: new Date().toISOString(),
+                duration: sessionStart ? (Date.now() - sessionStart) / 1000 : 0,
+                reps: repData.map(function(r) {
+                    return { n: r.n, angle: Math.round(r.angle * 10) / 10, t: Math.round(r.t * 10) / 10 };
+                })
+            };
+        }
+
+        /* Exportar PDF */
+        function exportPdf(session) {
+            if (!session.reps.length) {
+                setFeedback('No hay repeticiones para exportar todavía.', 'text-yellow-300');
+                return;
+            }
+            if (!window.jspdf || !window.jspdf.jsPDF) {
+                setFeedback('No se pudo cargar el generador de PDF. Revisa tu conexión y recarga la página.', 'text-red-300');
+                return;
+            }
+            try {
+                const doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
+                const M = 15;
+                const angles = session.reps.map(function(r) { return r.angle; });
+                const st = statsOf(angles);
+                let y = 20;
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(18);
+                doc.setTextColor(17, 24, 39);
+                doc.text('Velocity - Informe de sentadillas', M, y);
+                y += 8;
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(10);
+                doc.setTextColor(75, 85, 99);
+                doc.text('Fecha: ' + formatDate(session.date) + '    Duración: ' + fmtDur(session.duration), M, y);
+                y += 5;
+                doc.text('Repeticiones: ' + angles.length + '    Ángulo mínimo promedio: ' + Math.round(st.avg) + '°    Más profunda: ' + Math.round(st.min) + '°    Menos profunda: ' + Math.round(st.max) + '°', M, y);
+                y += 9;
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(11);
+                doc.setTextColor(17, 24, 39);
+                doc.text('Ángulo mínimo de la rodilla en cada repetición', M, y);
+                y += 3;
+                const cv = document.createElement('canvas');
+                cv.width = 1200; cv.height = 560;
+                drawBarChart(cv, angles, true, 1);
+                const imgW = 180, imgH = imgW * cv.height / cv.width;
+                doc.addImage(cv.toDataURL('image/png'), 'PNG', M, y, imgW, imgH);
+                y += imgH + 4;
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(8);
+                doc.setTextColor(107, 114, 128);
+                doc.text('Menor ángulo = sentadilla más profunda. La línea punteada marca 90°.', M, y);
+                y += 8;
+                const header = function() {
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(10);
+                    doc.setTextColor(17, 24, 39);
+                    doc.text('Repetición', M + 2, y);
+                    doc.text('Ángulo mínimo (°)', M + 40, y);
+                    doc.text('Tiempo (s)', M + 90, y);
+                    y += 2;
+                    doc.setDrawColor(209, 213, 219);
+                    doc.line(M, y, M + 180, y);
+                    y += 5;
+                    doc.setFont('helvetica', 'normal');
+                };
+                header();
+                session.reps.forEach(function(r, i) {
+                    if (y > 275) { doc.addPage(); y = 20; header(); }
+                    if (i % 2 === 0) { doc.setFillColor(243, 244, 246); doc.rect(M, y - 4, 180, 6, 'F'); }
+                    doc.setTextColor(31, 41, 55);
+                    doc.text(String(r.n), M + 2, y);
+                    doc.text(Number(r.angle).toFixed(1), M + 40, y);
+                    doc.text(Number(r.t).toFixed(1), M + 90, y);
+                    y += 6;
+                });
+                y += 6;
+                if (y > 270) { doc.addPage(); y = 20; }
+                doc.setFontSize(8);
+                doc.setTextColor(107, 114, 128);
+                const note = doc.splitTextToSize('Los ángulos son estimaciones hechas con la cámara del celular y sirven como ayuda visual. No reemplazan la evaluación de un profesional.', 180);
+                doc.text(note, M, y);
+                saveBlob(doc.output('blob'), 'velocity-sentadillas-' + fileStamp(session.date) + '.pdf');
+            } catch (error) {
+                setFeedback('No se pudo crear el PDF: ' + error.message, 'text-red-300');
+            }
+        }
+
+        /* Guardar la sentadilla actual en el historial */
+        async function saveSession() {
+            if (!repData.length) {
+                setFeedback('Haz al menos una repetición antes de guardar.', 'text-yellow-300');
+                return false;
+            }
+            saveSessionButton.disabled = true;
+            let id = null;
+            try {
+                const video = await stopRecording();
+                const session = currentSession();
+                id = String(Date.now());
+                session.id = id;
+                session.hasVideo = false;
+                if (video) {
+                    try {
+                        await idbPut(id, video);
+                        session.hasVideo = true;
+                    } catch (error) { /* se guarda sin video */ }
+                }
+                const list = loadSessions();
+                list.unshift(session);
+                if (!storeSessions(list)) {
+                    if (session.hasVideo) idbDelete(id).catch(function() {});
+                    throw new Error('no hay espacio para guardar');
+                }
+                resetAnalysis();
+                renderHistory();
+                setFeedback('Sentadilla guardada en el historial (' + session.reps.length + ' repeticiones).', 'text-emerald-300');
+                return true;
+            } catch (error) {
+                setFeedback('No se pudo guardar: ' + error.message, 'text-red-300');
+                return false;
+            } finally {
+                saveSessionButton.disabled = false;
+            }
+        }
+
+        function deleteSession(id) {
+            storeSessions(loadSessions().filter(function(s) { return s.id !== id; }));
+            idbDelete(id).catch(function() {});
+            renderHistory();
+        }
+
+        function closeVideo() {
+            playbackVideo.pause();
+            playbackVideo.removeAttribute('src');
+            playbackVideo.load();
+            if (playbackUrl) { URL.revokeObjectURL(playbackUrl); playbackUrl = null; }
+            playbackBlob = null;
+            playbackSession = null;
+            videoModal.classList.add('hidden');
+        }
+
+        async function openVideo(session) {
+            try {
+                const blob = await idbGet(session.id);
+                if (!blob) { setFeedback('El video de esta sentadilla ya no está disponible.', 'text-yellow-300'); return; }
+                closeVideo();
+                playbackBlob = blob;
+                playbackSession = session;
+                playbackUrl = URL.createObjectURL(blob);
+                playbackVideo.src = playbackUrl;
+                videoModal.classList.remove('hidden');
+                playbackVideo.play().catch(function() {});
+            } catch (error) {
+                setFeedback('No se pudo abrir el video: ' + error.message, 'text-red-300');
+            }
+        }
+
+        function makeButton(label, classes, handler) {
+            const button = document.createElement('button');
+            button.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold ' + classes;
+            button.textContent = label;
+            button.addEventListener('click', handler);
+            return button;
+        }
+
+        function renderHistory() {
+            const list = loadSessions().slice(0, 20);
+            historyList.textContent = '';
+            historyEmpty.classList.toggle('hidden', list.length > 0);
+            list.forEach(function(s) {
+                const angles = s.reps.map(function(r) { return r.angle; });
+                const st = statsOf(angles);
+                const card = document.createElement('div');
+                card.className = 'panel-subtle rounded-xl p-3 mb-3';
+
+                const head = document.createElement('div');
+                head.className = 'flex justify-between items-center gap-2 mb-2 text-xs';
+                const when = document.createElement('span');
+                when.className = 'text-zinc-200 font-semibold';
+                when.textContent = formatDate(s.date);
+                const info = document.createElement('span');
+                info.className = 'text-zinc-400';
+                info.textContent = s.reps.length + ' rep · prom. ' + (st ? Math.round(st.avg) : '—') + '° · ' + fmtDur(s.duration);
+                head.appendChild(when);
+                head.appendChild(info);
+
+                const cv = document.createElement('canvas');
+                cv.className = 'block w-full';
+                cv.style.height = '150px';
+
+                const row = document.createElement('div');
+                row.className = 'flex flex-wrap gap-2 mt-2';
+                row.appendChild(makeButton('Exportar PDF', 'bg-amber-500 text-black', function() { exportPdf(s); }));
+                if (s.hasVideo) row.appendChild(makeButton('Ver video', 'bg-zinc-800 text-yellow-400 border border-amber-500/40', function() { openVideo(s); }));
+                const del = makeButton('Borrar', 'bg-zinc-800 text-red-300 border border-zinc-700', function() {
+                    if (del.dataset.arm !== '1') {
+                        del.dataset.arm = '1';
+                        del.textContent = '¿Seguro?';
+                        window.setTimeout(function() { del.dataset.arm = ''; del.textContent = 'Borrar'; }, 3000);
+                        return;
+                    }
+                    deleteSession(s.id);
+                });
+                row.appendChild(del);
+
+                card.appendChild(head);
+                card.appendChild(cv);
+                card.appendChild(row);
+                historyList.appendChild(card);
+                sizeCanvas(cv);
+                drawBarChart(cv, angles, false, window.devicePixelRatio || 1);
+            });
+        }
+
+        function showModalInfo(text) {
+            modalFeedback.textContent = text;
+            modalFeedback.className = 'text-xs text-emerald-300 mb-3';
+        }
+
+        saveSessionButton.addEventListener('click', saveSession);
+        document.getElementById('export-pdf-btn').addEventListener('click', function() { exportPdf(currentSession()); });
+        document.getElementById('video-close-btn').addEventListener('click', closeVideo);
+        document.getElementById('video-download-btn').addEventListener('click', function() {
+            if (playbackBlob && playbackSession) {
+                saveBlob(playbackBlob, 'velocity-sentadilla-' + fileStamp(playbackSession.date) + videoExt(playbackBlob));
+            }
+        });
+        recordToggle.addEventListener('change', function() {
+            if (!recordToggle.checked) discardRecording();
+        });
+        stopCameraButton.addEventListener('click', async function() {
+            let saved = false;
+            if (repData.length) saved = await saveSession();
+            stopCamera();
+            modal.classList.remove('hidden');
+            if (saved) showModalInfo('Tu sentadilla se guardó en el historial.');
+        });
+        let resizeTimer = null;
+        window.addEventListener('resize', function() {
+            window.clearTimeout(resizeTimer);
+            resizeTimer = window.setTimeout(function() { renderResults(); renderHistory(); }, 200);
+        });
+        renderResults();
+        renderHistory();
+
+        window.addEventListener('beforeunload', stopCamera);
+    </script>
+</body>
+</html>
